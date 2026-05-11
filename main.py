@@ -9,252 +9,108 @@ import uuid
 import time
 import logging
 import json
-import io
-
-from typing import Optional, List
+from typing import List, Optional
 from pathlib import Path
 
-# ─────────────────────────────────────────────
-# Load ENV
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# LOAD ENV
+# ─────────────────────────────
 load_dotenv()
 
-# ─────────────────────────────────────────────
-# Logging
-# ─────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
+# ─────────────────────────────
+# APP
+# ─────────────────────────────
+app = FastAPI(title="Rehman AI Backend", version="3.1")
 
-log = logging.getLogger("nova")
-
-# ─────────────────────────────────────────────
-# FastAPI App
-# ─────────────────────────────────────────────
-app = FastAPI(
-    title="Nova AI Backend",
-    version="3.0"
-)
-
-# ─────────────────────────────────────────────
-# CORS
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# CORS (IMPORTANT FIX)
+# ─────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # later replace with your vercel domain
+    allow_origins=["*"],  # later replace with your Vercel domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ─────────────────────────────────────────────
-# ENV Variables
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# LOGGING
+# ─────────────────────────────
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("ai")
+
+# ─────────────────────────────
+# ENV
+# ─────────────────────────────
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-if not GROQ_API_KEY:
-    log.warning("GROQ_API_KEY not found")
-
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-
 MODEL = "llama-3.3-70b-versatile"
 
 MAX_HISTORY = 40
 SESSION_TTL = 7200
 
-# ─────────────────────────────────────────────
-# Session Store
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# MEMORY
+# ─────────────────────────────
 sessions = {}
 
-# ─────────────────────────────────────────────
-# Chat History Storage
-# ─────────────────────────────────────────────
 HISTORY_DIR = Path("chat_histories")
 HISTORY_DIR.mkdir(exist_ok=True)
 
-# ─────────────────────────────────────────────
-# Save Session
-# ─────────────────────────────────────────────
-def save_session_to_disk(session_id: str, session: dict):
-    try:
-        path = HISTORY_DIR / f"{session_id}.json"
-
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(session, f, ensure_ascii=False, indent=2)
-
-    except Exception as e:
-        log.warning(f"Save session failed: {e}")
-
-# ─────────────────────────────────────────────
-# Load Session
-# ─────────────────────────────────────────────
-def load_session_from_disk(session_id: str):
-
-    try:
-        path = HISTORY_DIR / f"{session_id}.json"
-
-        if path.exists():
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-
-    except Exception as e:
-        log.warning(f"Load session failed: {e}")
-
-    return None
-
-# ─────────────────────────────────────────────
-# List Sessions
-# ─────────────────────────────────────────────
-def list_all_sessions():
-
-    results = []
-
-    for path in sorted(
-        HISTORY_DIR.glob("*.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True
-    ):
-
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            results.append({
-                "session_id": path.stem,
-                "title": data.get("title", "New Conversation"),
-                "created": data.get("created", 0),
-                "last_used": data.get("last_used", 0),
-                "message_count": len(data.get("history", [])),
-            })
-
-        except:
-            pass
-
-    return results[:50]
-
-# ─────────────────────────────────────────────
-# System Prompt
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# SYSTEM PROMPT
+# ─────────────────────────────
 SYSTEM_PROMPT = """
-You are Nova, a smart AI assistant.
-
-Be helpful, accurate, and professional.
-Use markdown formatting.
+You are Rehman AI, a smart assistant.
+Be helpful, clear, and use markdown formatting.
 """
 
-# ─────────────────────────────────────────────
-# Modes
-# ─────────────────────────────────────────────
-MODE_INSTRUCTIONS = {
-    "chat": lambda msg: msg,
-    "info": lambda msg: f"Explain clearly:\n\n{msg}",
-    "translate": lambda msg: f"Translate:\n\n{msg}",
-    "code": lambda msg: f"Provide production-ready code:\n\n{msg}",
-    "summarize": lambda msg: f"Summarize:\n\n{msg}",
-}
-
-# ─────────────────────────────────────────────
-# File Reader
-# ─────────────────────────────────────────────
-def extract_text_from_file(filename: str, content: bytes):
-
-    ext = filename.lower().split(".")[-1]
+# ─────────────────────────────
+# FILE READER
+# ─────────────────────────────
+def extract_text(filename: str, content: bytes):
+    ext = filename.split(".")[-1].lower()
 
     try:
+        if ext in ["txt", "py", "js", "html", "css"]:
+            return content.decode("utf-8", errors="ignore")[:8000]
 
-        if ext == "txt":
-            return content.decode("utf-8", errors="replace")
+        if ext == "json":
+            return json.dumps(json.loads(content.decode()), indent=2)[:8000]
 
-        elif ext == "json":
-            text = content.decode("utf-8", errors="replace")
+        return f"[File uploaded: {filename}]"
 
-            try:
-                data = json.loads(text)
+    except:
+        return f"[Unreadable file: {filename}]"
 
-                return json.dumps(
-                    data,
-                    indent=2,
-                    ensure_ascii=False
-                )[:8000]
+# ─────────────────────────────
+# SESSION HELPERS
+# ─────────────────────────────
+def get_session(sid: str):
+    if sid not in sessions:
+        sessions[sid] = {
+            "history": [],
+            "created": time.time(),
+            "last_used": time.time(),
+            "title": "New Chat"
+        }
 
-            except:
-                return text[:8000]
+    sessions[sid]["last_used"] = time.time()
+    return sessions[sid]
 
-        elif ext == "py":
-            return content.decode("utf-8", errors="replace")
+# ─────────────────────────────
+# SAVE SESSION
+# ─────────────────────────────
+def save_session(sid: str, data: dict):
+    path = HISTORY_DIR / f"{sid}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
-        elif ext in ["js", "ts", "html", "css"]:
-            return content.decode("utf-8", errors="replace")[:8000]
-
-        else:
-            return f"[Uploaded file: {filename}]"
-
-    except Exception as e:
-        return f"[Could not read file: {str(e)}]"
-
-# ─────────────────────────────────────────────
-# Session Cleanup
-# ─────────────────────────────────────────────
-def clean_sessions():
-
-    now = time.time()
-
-    expired = [
-        sid for sid, data in sessions.items()
-        if now - data["last_used"] > SESSION_TTL
-    ]
-
-    for sid in expired:
-        del sessions[sid]
-
-# ─────────────────────────────────────────────
-# Get Session
-# ─────────────────────────────────────────────
-def get_session(session_id: str):
-
-    clean_sessions()
-
-    if session_id not in sessions:
-
-        saved = load_session_from_disk(session_id)
-
-        if saved:
-            sessions[session_id] = saved
-
-        else:
-            sessions[session_id] = {
-                "history": [],
-                "created": time.time(),
-                "last_used": time.time(),
-                "title": "New Conversation"
-            }
-
-    sessions[session_id]["last_used"] = time.time()
-
-    return sessions[session_id]
-
-# ─────────────────────────────────────────────
-# Generate Title
-# ─────────────────────────────────────────────
-def generate_title(message: str):
-
-    words = message.strip().split()
-
-    title = " ".join(words[:6])
-
-    if len(words) > 6:
-        title += "..."
-
-    return title[:50]
-
-# ─────────────────────────────────────────────
-# Call GROQ
-# ─────────────────────────────────────────────
-def call_groq(messages, temperature=0.7):
-
-    response = requests.post(
+# ─────────────────────────────
+# GROQ CALL
+# ─────────────────────────────
+def call_groq(messages):
+    res = requests.post(
         GROQ_URL,
         headers={
             "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -263,43 +119,54 @@ def call_groq(messages, temperature=0.7):
         json={
             "model": MODEL,
             "messages": messages,
-            "temperature": temperature,
-            "max_tokens": 2048,
-        },
-        timeout=45
+            "temperature": 0.7,
+            "max_tokens": 2048
+        }
     )
 
-    if response.status_code != 200:
-        raise RuntimeError(response.text)
+    return res.json()["choices"][0]["message"]["content"]
 
-    data = response.json()
-
-    return data["choices"][0]["message"]["content"]
-
-# ─────────────────────────────────────────────
-# Routes
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# ROUTES
+# ─────────────────────────────
 @app.get("/")
 def home():
-
-    return {
-        "status": "Nova AI Running 🚀",
-        "model": MODEL,
-        "sessions": len(sessions)
-    }
+    return {"status": "Rehman AI running"}
 
 @app.get("/health")
 def health():
-
     return {"ok": True}
 
+# ✅ FIX: history list
 @app.get("/history")
 def history():
+    out = []
+    for sid, s in sessions.items():
+        out.append({
+            "session_id": sid,
+            "title": s["title"],
+            "last_used": s["last_used"],
+            "message_count": len(s["history"])
+        })
+    return {"sessions": out}
 
-    return {
-        "sessions": list_all_sessions()
-    }
+# ✅ FIX: session load (MISSING BEFORE)
+@app.get("/session/{sid}")
+def load_session(sid: str):
+    return get_session(sid)
 
+# ✅ FIX: delete session
+@app.delete("/session/{sid}")
+def delete_session(sid: str):
+    sessions.pop(sid, None)
+    file = HISTORY_DIR / f"{sid}.json"
+    if file.exists():
+        file.unlink()
+    return {"deleted": True}
+
+# ─────────────────────────────
+# CHAT
+# ─────────────────────────────
 @app.post("/chat")
 async def chat(
     message: str = Form(...),
@@ -308,93 +175,30 @@ async def chat(
     files: List[UploadFile] = File(default=[])
 ):
 
-    try:
+    sid = session_id or str(uuid.uuid4())
+    session = get_session(sid)
 
-        sid = session_id or str(uuid.uuid4())
+    file_text = ""
 
-        session = get_session(sid)
+    for f in files:
+        raw = await f.read()
+        file_text += extract_text(f.filename, raw) + "\n"
 
-        history = session["history"]
+    user_input = message + "\n\n" + file_text
 
-        mode = mode if mode in MODE_INSTRUCTIONS else "chat"
+    session["history"].append({"role": "user", "content": user_input})
 
-        file_contents = []
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + session["history"][-MAX_HISTORY:]
 
-        for upload in files:
+    reply = call_groq(messages)
 
-            raw = await upload.read()
+    session["history"].append({"role": "assistant", "content": reply})
+    session["title"] = message[:40]
 
-            extracted = extract_text_from_file(
-                upload.filename,
-                raw
-            )
+    save_session(sid, session)
 
-            file_contents.append(
-                f"=== {upload.filename} ===\n{extracted}"
-            )
-
-        build = MODE_INSTRUCTIONS[mode]
-
-        full_input = build(message)
-
-        if file_contents:
-            full_input += "\n\n" + "\n\n".join(file_contents)
-
-        if not history:
-            session["title"] = generate_title(message)
-
-        history.append({
-            "role": "user",
-            "content": full_input
-        })
-
-        messages = [
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT
-            },
-            *history
-        ]
-
-        reply = call_groq(messages)
-
-        history.append({
-            "role": "assistant",
-            "content": reply
-        })
-
-        session["history"] = history[-MAX_HISTORY:]
-
-        save_session_to_disk(sid, session)
-
-        return {
-            "reply": reply,
-            "session_id": sid,
-            "title": session["title"]
-        }
-
-    except Exception as e:
-
-        log.exception(str(e))
-
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": str(e)
-            }
-        )
-
-# ─────────────────────────────────────────────
-# Railway Startup
-# ─────────────────────────────────────────────
-if __name__ == "__main__":
-
-    import uvicorn
-
-    PORT = int(os.environ.get("PORT", 8000))
-
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=PORT
-    )
+    return {
+        "reply": reply,
+        "session_id": sid,
+        "session_title": session["title"]
+    }
