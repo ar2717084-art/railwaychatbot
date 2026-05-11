@@ -3,7 +3,7 @@ uvicorn
 python-dotenv
 requests
 python-multipart
-PyPDF2
 pdfplumber
+PyPDF2
 python-docx
 openpyxl

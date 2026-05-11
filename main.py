@@ -11,18 +11,22 @@ from pathlib import Path
 
 load_dotenv()
 
-app = FastAPI(title="Rehman AI Backend", version="4.0")
+app = FastAPI(title="Rehman AI Backend", version="4.1")
 
-# ✅ FIXED CORS (IMPORTANT FOR VERCEL)
+# ─────────────────────────────
+# CORS (IMPORTANT FOR VERCEL)
+# ─────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # safe for testing, restrict later
+    allow_origins=["*"],  # you can restrict later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ─── ENV ─────────────────────────
+# ─────────────────────────────
+# ENV
+# ─────────────────────────────
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL = "llama-3.3-70b-versatile"
@@ -38,7 +42,9 @@ You are Rehman AI, a smart assistant.
 Be helpful, clear, and use markdown formatting.
 """
 
-# ─── FILE HANDLER ─────────────────
+# ─────────────────────────────
+# FILE READER
+# ─────────────────────────────
 def extract_text(filename: str, content: bytes):
     try:
         if filename.endswith((".txt", ".py", ".js", ".html", ".css")):
@@ -51,7 +57,9 @@ def extract_text(filename: str, content: bytes):
     except:
         return f"[Unreadable file: {filename}]"
 
-# ─── SESSION ───────────────────────
+# ─────────────────────────────
+# SESSION
+# ─────────────────────────────
 def get_session(sid: str):
     if sid not in sessions:
         sessions[sid] = {
@@ -63,7 +71,9 @@ def get_session(sid: str):
     sessions[sid]["last_used"] = time.time()
     return sessions[sid]
 
-# ─── GROQ CALL ─────────────────────
+# ─────────────────────────────
+# GROQ CALL
+# ─────────────────────────────
 def call_groq(messages):
     try:
         res = requests.post(
@@ -83,10 +93,12 @@ def call_groq(messages):
     except Exception as e:
         return f"Error: {str(e)}"
 
-# ─── ROUTES ────────────────────────
+# ─────────────────────────────
+# ROUTES
+# ─────────────────────────────
 @app.get("/")
 def home():
-    return {"status": "Rehman AI running"}
+    return {"status": "Rehman AI running on Render"}
 
 @app.get("/health")
 def health():
@@ -94,15 +106,17 @@ def health():
 
 @app.get("/history")
 def history():
-    return {"sessions": [
-        {
-            "session_id": sid,
-            "title": s["title"],
-            "last_used": s["last_used"],
-            "message_count": len(s["history"])
-        }
-        for sid, s in sessions.items()
-    ]}
+    return {
+        "sessions": [
+            {
+                "session_id": sid,
+                "title": s["title"],
+                "last_used": s["last_used"],
+                "message_count": len(s["history"])
+            }
+            for sid, s in sessions.items()
+        ]
+    }
 
 @app.get("/session/{sid}")
 def load_session(sid: str):
@@ -111,9 +125,6 @@ def load_session(sid: str):
 @app.delete("/session/{sid}")
 def delete_session(sid: str):
     sessions.pop(sid, None)
-    file = HISTORY_DIR / f"{sid}.json"
-    if file.exists():
-        file.unlink()
     return {"deleted": True}
 
 @app.post("/chat")
