@@ -1,91 +1,57 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-
 import os
 import requests
 import uuid
 import time
-import logging
 import json
-from typing import List, Optional
+from typing import List
 from pathlib import Path
 
-# ─────────────────────────────
-# LOAD ENV
-# ─────────────────────────────
 load_dotenv()
 
-# ─────────────────────────────
-# APP
-# ─────────────────────────────
-app = FastAPI(title="Rehman AI Backend", version="3.1")
+app = FastAPI(title="Rehman AI Backend", version="4.0")
 
-# ─────────────────────────────
-# CORS (IMPORTANT FIX)
-# ─────────────────────────────
+# ✅ FIXED CORS (IMPORTANT FOR VERCEL)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # later replace with your Vercel domain
+    allow_origins=["*"],  # safe for testing, restrict later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ─────────────────────────────
-# LOGGING
-# ─────────────────────────────
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("ai")
-
-# ─────────────────────────────
-# ENV
-# ─────────────────────────────
+# ─── ENV ─────────────────────────
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL = "llama-3.3-70b-versatile"
 
 MAX_HISTORY = 40
-SESSION_TTL = 7200
 
-# ─────────────────────────────
-# MEMORY
-# ─────────────────────────────
 sessions = {}
-
 HISTORY_DIR = Path("chat_histories")
 HISTORY_DIR.mkdir(exist_ok=True)
 
-# ─────────────────────────────
-# SYSTEM PROMPT
-# ─────────────────────────────
 SYSTEM_PROMPT = """
 You are Rehman AI, a smart assistant.
 Be helpful, clear, and use markdown formatting.
 """
 
-# ─────────────────────────────
-# FILE READER
-# ─────────────────────────────
+# ─── FILE HANDLER ─────────────────
 def extract_text(filename: str, content: bytes):
-    ext = filename.split(".")[-1].lower()
-
     try:
-        if ext in ["txt", "py", "js", "html", "css"]:
+        if filename.endswith((".txt", ".py", ".js", ".html", ".css")):
             return content.decode("utf-8", errors="ignore")[:8000]
 
-        if ext == "json":
+        if filename.endswith(".json"):
             return json.dumps(json.loads(content.decode()), indent=2)[:8000]
 
         return f"[File uploaded: {filename}]"
-
     except:
         return f"[Unreadable file: {filename}]"
 
-# ─────────────────────────────
-# SESSION HELPERS
-# ─────────────────────────────
+# ─── SESSION ───────────────────────
 def get_session(sid: str):
     if sid not in sessions:
         sessions[sid] = {
@@ -94,41 +60,30 @@ def get_session(sid: str):
             "last_used": time.time(),
             "title": "New Chat"
         }
-
     sessions[sid]["last_used"] = time.time()
     return sessions[sid]
 
-# ─────────────────────────────
-# SAVE SESSION
-# ─────────────────────────────
-def save_session(sid: str, data: dict):
-    path = HISTORY_DIR / f"{sid}.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-# ─────────────────────────────
-# GROQ CALL
-# ─────────────────────────────
+# ─── GROQ CALL ─────────────────────
 def call_groq(messages):
-    res = requests.post(
-        GROQ_URL,
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": MODEL,
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 2048
-        }
-    )
+    try:
+        res = requests.post(
+            GROQ_URL,
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": MODEL,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 2048
+            }
+        )
+        return res.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"Error: {str(e)}"
 
-    return res.json()["choices"][0]["message"]["content"]
-
-# ─────────────────────────────
-# ROUTES
-# ─────────────────────────────
+# ─── ROUTES ────────────────────────
 @app.get("/")
 def home():
     return {"status": "Rehman AI running"}
@@ -137,25 +92,22 @@ def home():
 def health():
     return {"ok": True}
 
-# ✅ FIX: history list
 @app.get("/history")
 def history():
-    out = []
-    for sid, s in sessions.items():
-        out.append({
+    return {"sessions": [
+        {
             "session_id": sid,
             "title": s["title"],
             "last_used": s["last_used"],
             "message_count": len(s["history"])
-        })
-    return {"sessions": out}
+        }
+        for sid, s in sessions.items()
+    ]}
 
-# ✅ FIX: session load (MISSING BEFORE)
 @app.get("/session/{sid}")
 def load_session(sid: str):
     return get_session(sid)
 
-# ✅ FIX: delete session
 @app.delete("/session/{sid}")
 def delete_session(sid: str):
     sessions.pop(sid, None)
@@ -164,13 +116,9 @@ def delete_session(sid: str):
         file.unlink()
     return {"deleted": True}
 
-# ─────────────────────────────
-# CHAT
-# ─────────────────────────────
 @app.post("/chat")
 async def chat(
     message: str = Form(...),
-    mode: str = Form("chat"),
     session_id: str = Form(None),
     files: List[UploadFile] = File(default=[])
 ):
@@ -179,7 +127,6 @@ async def chat(
     session = get_session(sid)
 
     file_text = ""
-
     for f in files:
         raw = await f.read()
         file_text += extract_text(f.filename, raw) + "\n"
@@ -195,10 +142,9 @@ async def chat(
     session["history"].append({"role": "assistant", "content": reply})
     session["title"] = message[:40]
 
-    save_session(sid, session)
-
     return {
         "reply": reply,
         "session_id": sid,
         "session_title": session["title"]
     }
+    
