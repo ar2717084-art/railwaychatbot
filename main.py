@@ -89,9 +89,14 @@ def call_groq(messages):
                 "max_tokens": 2048
             }
         )
-        return res.json()["choices"][0]["message"]["content"]
+
+        res.raise_for_status()
+        data = res.json()
+
+        return data["choices"][0]["message"]["content"]
+
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Server Error: {str(e)}"
 
 # ─────────────────────────────
 # ROUTES
