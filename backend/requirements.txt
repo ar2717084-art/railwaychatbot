@@ -1,5 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-dotenv
 requests
 python-multipart
@@ -7,3 +7,4 @@ pdfplumber
 PyPDF2
 python-docx
 openpyxl
+gunicorn
